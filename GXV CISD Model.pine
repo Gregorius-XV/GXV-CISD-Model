@@ -1,0 +1,1723 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Gregorius_XV & cdikici71
+// Standalone extraction: CISD model + three HTF panes. 
+
+//@version=6
+indicator("GXV CISD Model", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+import Gregorius_XV/GXVUtils/10 as QTU
+
+//==============================================================================
+// Time declarations
+//==============================================================================
+tf_sec = timeframe.in_seconds(timeframe.period)
+TF_SEC_3 = timeframe.in_seconds("3")
+TF_SEC_15 = timeframe.in_seconds("15")
+TF_SEC_60 = timeframe.in_seconds("60")
+TF_SEC_240 = timeframe.in_seconds("240")
+TF_SEC_3M = timeframe.in_seconds("3M")
+TF_SEC_D = timeframe.in_seconds("D")
+TF_SEC_W = timeframe.in_seconds("W")
+TF_SEC_M = timeframe.in_seconds("M")
+
+//==============================================================================
+// Groups
+//==============================================================================
+gHTFSetings = "1. HTF Pane Visuals"
+gCISD = "2. CISD"
+gHTFCISD = "3. HTF CISD"
+gHTF = "4. HTF Settings"
+gDealingRange = "5. Dealing Range"
+gSDP= '6. SD Projections'
+gKeyLevels = "7. Key Levels"
+gPerformance = "8. Performance"
+//==============================================================================
+// Inputs
+//==============================================================================
+
+// GENERAL SETTINGS
+global_mono_font = input.bool(false, 'Monospaced Font?', group = gHTFSetings)
+global_font_family = global_mono_font ? font.family_monospace : font.family_default
+global_text_color = input.color(#636363, 'Global Text Color', inline='gtxt', group = gHTFSetings)
+
+bull_color = input.color(#ffffff, 'Body  ', inline = 'body', group = gHTFSetings)
+bear_color = input.color(#4a4a4a, '', inline = 'body', group = gHTFSetings)
+bull_border_color = input.color(#9c9c9c, 'Border ', inline = 'border', group = gHTFSetings)
+bear_border_color = input.color(#4a4a4a, '', inline = 'border', group = gHTFSetings)
+bull_wick_color = input.color(#bebfc3, 'Wick  ', inline = 'wick', group = gHTFSetings)
+bear_wick_color = input.color(#bebfc3, '', inline = 'wick', group = gHTFSetings)
+
+htf_sweeps_offset = input.int(25, 'Distance from Candles      ', group = gHTFSetings, minval = 1)
+htf_sweeps_distance_between = input.int(10, 'Distance Between HTFs      ', group = gHTFSetings, minval = 2)
+htf_candle_width_input = input.int(2, 'Candles Width          ', group = gHTFSetings, minval = 1, maxval = 5)
+htf_candle_width = QTU.htfCandleWidth(htf_candle_width_input)
+
+htf_label_show = input.bool(true, 'HTF Label', inline = 'htflbl', group = gHTFSetings)
+htf_timer_show = input.bool(true, 'Remaining Time', inline = 'htflbl', group = gHTFSetings)
+htf_timer_color = input.color(#b8b8b8, '', inline = 'htflbl', group = gHTFSetings)
+htf_label_position = input.string('Both', 'Label Position', options = ['Both', 'Top', 'Bottom'],  inline='lblpos', group = gHTFSetings)
+htf_label_alignment = input.string('Align', ' ', options = ['Align', 'Follow Candles'], inline='lblpos', group = gHTFSetings)
+
+htf_sweep_color = input.color(#9c9c9c, 'Sweeps', inline = 'sweep', group = gHTFSetings)
+htf_sweeps_display = input.string('HTF Pane + Main', ' ', options = ['HTF Pane Only', 'Main Chart Only', 'HTF Pane + Main'], inline='sweep', group = gHTFSetings)
+htf_sweep_display_mode = input.string('Recent Sweep Only', ' ', options = ['Recent Sweep Only', 'Last 2 Sweeps Only', 'Last 4 Sweeps Only', 'All Sweeps'], inline = 'sweep', group = gHTFSetings)
+htf_sweep_display_cap = htf_sweep_display_mode == 'Recent Sweep Only' ? 1 : htf_sweep_display_mode == 'Last 2 Sweeps Only' ? 2 : htf_sweep_display_mode == 'Last 4 Sweeps Only' ? 4 : 100000
+
+// CISD
+
+const int cisd_extend_bars = 5
+const int cisd_max_candles = 5
+const int HTF_PANE_CISD_SCAN_CANDLES = 2
+const int HTF_PANE_CISD_EXTEND_BARS = 5
+const int SD_PROJECTION_EXTEND_BARS = 5
+const int SD_PROJECTION_LEVEL_CAP = 20
+const int CISD_EVENT_STATE_CAP = 64
+
+cisd_show = input.bool(true, 'Enable CISD?', inline = 'CISD', group = gCISD)
+cisd_display_cap = input.int(10, 'Display Cap', minval = 1, maxval = 50, group = gCISD, active = cisd_show)
+cisd_render_mode_input = input.string('Allowed HTF Panes Untied', 'CISD Render Mode', options = ['Allowed HTF Panes Tied', 'Allowed HTF Panes Untied'], group = gCISD, active = cisd_show)
+cisd_bull_clr = input.color(color.new(#4daae1, 0), '', inline = 'CISD', group = gCISD)
+cisd_bear_clr = input.color(color.new(#cd0030, 0), '', inline = 'CISD', group = gCISD)
+cisd_line_width = input.int(2, 'CISD Line Width', minval = 1, maxval = 5, group = gCISD, active = cisd_show)
+
+cisd_early_show = input.bool(false, 'Early CISD', group = gCISD, active = cisd_show)
+cisd_early_line_style_input = input.string('Dashed', 'Style', options = ['Solid', 'Dashed', 'Dotted'], inline = 'ECISD', group = gCISD, active = cisd_show and cisd_early_show)
+cisd_early_line_width = input.int(1, 'Width', minval = 1, maxval = 5, inline = 'ECISD', group = gCISD, active = cisd_show and cisd_early_show)
+cisd_early_line_style = cisd_early_line_style_input == 'Solid' ? line.style_solid : cisd_early_line_style_input == 'Dotted' ? line.style_dotted : line.style_dashed
+
+htf_cisd_show = input.bool(true, 'Enable HTF CISD?', inline = 'HTF_CISD', group = gHTFCISD)
+htf_cisd_bull_clr = input.color(color.new(#4daae1, 0), '', inline = 'HTF_CISD', group = gHTFCISD)
+htf_cisd_bear_clr = input.color(color.new(#cd0030, 0), '', inline = 'HTF_CISD', group = gHTFCISD)
+htf_cisd_line_width = input.int(2, 'Line Width', minval = 1, maxval = 5, group = gHTFCISD, active = htf_cisd_show)
+
+htf_early_cisd_show = input.bool(false, 'HTF Early CISD', group = gHTFCISD, active = htf_cisd_show)
+htf_early_cisd_line_style_input = input.string('Dashed', 'Style', options = ['Solid', 'Dashed', 'Dotted'], inline = 'HTFECISD', group = gHTFCISD, active = htf_cisd_show and htf_early_cisd_show)
+htf_early_cisd_line_width = input.int(1, 'Width', minval = 1, maxval = 5, inline = 'HTFECISD', group = gHTFCISD, active = htf_cisd_show and htf_early_cisd_show)
+htf_early_cisd_line_style = htf_early_cisd_line_style_input == 'Solid' ? line.style_solid : htf_early_cisd_line_style_input == 'Dotted' ? line.style_dotted : line.style_dashed
+
+// HTF SETTINGS
+
+htf_auto = input.bool(true, 'Auto Fractals?', group = gHTF)
+htf_custom_daily_open = input.bool(false, 'Custom Daily Open        ', inline = 'customdaily', group = gHTF)
+htf_custom_daily_time = input.string('Midnight', '', options = ['Midnight', '18:00'], inline = 'customdaily', group = gHTF)
+
+htf_sweeps_tf_1_show = input.bool(false, 'HTF1 Model',  inline='CISD1', group = gHTF)
+htf_pane_cisd_1_show = input.bool(true, 'Plot HTF CISD on HTF1?', inline='CISD1',  group = gHTF, active = htf_cisd_show and htf_sweeps_tf_1_show)
+
+htf_sweeps_tf_1_custom_tf = input.string('1h', 'TF Source', options = ['3m', '5m', '15m', '30m', '90m', '1h', '2h', '3h', '4h', '6h', '12h', 'D', '3D', 'W', 'M', '3M', '6M', '12M'], inline = 'TF1_source', group = gHTF, active = htf_sweeps_tf_1_show and not htf_auto)
+htf_sweeps_tf_1_number = input.int(9, 'TF Count', minval = 1, maxval = 60, inline = 'TF1_source', group = gHTF, active = htf_sweeps_tf_1_show)
+
+htf_sweeps_tf_2_show = input.bool(true, 'HTF2 Model', inline='CISD2', group = gHTF)
+htf_pane_cisd_2_show = input.bool(true, 'Plot HTF CISD on HTF2?',  inline='CISD2', group = gHTF, active = htf_cisd_show and htf_sweeps_tf_2_show)
+
+htf_sweeps_tf_2_custom_tf = input.string('4h', 'TF Source', options = ['3m', '5m', '15m', '30m', '90m', '1h', '2h', '3h', '4h', '6h', '12h', 'D', '3D', 'W', 'M', '3M', '6M', '12M'], inline = 'TF2_source', group = gHTF, active = htf_sweeps_tf_2_show and not htf_auto)
+htf_sweeps_tf_2_number = input.int(6, 'TF Count', minval = 1, maxval = 60, inline = 'TF2_source', group = gHTF, active = htf_sweeps_tf_2_show)
+
+
+htf_sweeps_tf_3_show = input.bool(true, 'HTF3 Model', inline = 'CISD3', group = gHTF)
+htf_pane_cisd_3_show = input.bool(true, 'Plot HTF CISD on HTF3?', inline = 'CISD3', group = gHTF, active = htf_cisd_show and htf_sweeps_tf_3_show)
+
+htf_sweeps_tf_3_custom_tf = input.string('D', 'TF Source', options = ['3m', '5m', '15m', '30m', '90m', '1h', '2h', '3h', '4h', '6h', '12h', 'D', '3D', 'W', 'M', '3M', '6M', '12M'], inline = 'TF3_source', group = gHTF, active = htf_sweeps_tf_3_show and not htf_auto)
+htf_sweeps_tf_3_number = input.int(3, 'TF Count', minval = 1, maxval = 60, inline = 'TF3_source', group = gHTF, active = htf_sweeps_tf_3_show)
+
+// SD Projections
+
+sd_projection_show = input.bool(true, 'Enable SD Projections?', inline = 'SD_PROJECTION', group = gSDP)
+sd_projection_color = input.color(color.new(#636363, 0), '', inline = 'SD_PROJECTION', group = gSDP, active = sd_projection_show)
+sd_projection_source_input = input.string('On-chart CISD', 'SD Projections Source', options = ['On-chart CISD', 'HTF Pane CISD', 'HTF C2 Candle'], group = gSDP, active = sd_projection_show)
+sd_anchor_mode_input = input.string('Open to Close', 'SD Anchor Mode', options = ['Open to Close', 'High to Low'], group = gSDP, active = sd_projection_show)
+sd_projection_levels_input = input.string('2,2.5,4,4.5', 'SD Projection Levels', group = gSDP, active = sd_projection_show, tooltip = 'Comma-separated positive levels. Example: 2,2.5,4,4.5')
+
+
+// DEALING RANGE
+
+dealing_range_show = input.bool(false, 'Enable Dealing Range?', inline = 'DEALING_RANGE', group = gDealingRange)
+dealing_range_source_input = input.string('HTF3', 'HTF Pane Source', options = ['HTF1', 'HTF2', 'HTF3'], group = gDealingRange, active = dealing_range_show)
+dealing_range_display_input = input.string('HTF Pane Offset', 'Dealing Range Display', options = ['HTF Pane Overlay', 'On Chart Overlay', 'HTF Pane Offset'], group = gDealingRange, active = dealing_range_show)
+dealing_range_mode_input = input.string('Quadrants', 'Range Mode', options = ['Quadrants', 'Premium / Discount'], group = gDealingRange, active = dealing_range_show)
+dealing_range_premium_color = input.color(#b8b8b8, 'Premium', inline = 'DEALING_RANGE_COLORS', group = gDealingRange, active = dealing_range_show)
+dealing_range_discount_color = input.color(#636363, 'Discount', inline = 'DEALING_RANGE_COLORS', group = gDealingRange, active = dealing_range_show)
+dealing_range_label_color = input.color(#636363, 'Labels',  inline = 'DEALING_RANGE_COLORS', group = gDealingRange, active = dealing_range_show)
+
+// KEY LEVELS
+
+key_levels_show = input.bool(true, 'Enable Key Levels?', group = gKeyLevels)
+key_levels_line_color = input.color(#636363, 'Key Levels Lines', inline = 'KEY_LEVEL_LINES', group = gKeyLevels, active = key_levels_show)
+key_levels_line_style_input = input.string('Solid', 'Line Style', options = ['Solid', 'Dashed', 'Dotted'], inline = 'KEY_LEVEL_LINES', group = gKeyLevels, active = key_levels_show)
+key_levels_line_style = key_levels_line_style_input == 'Dashed' ? line.style_dashed : key_levels_line_style_input == 'Dotted' ? line.style_dotted : line.style_solid
+
+// Performance
+max_calc_bars = input.int(1000, 'Calculated Bars', minval = 100, maxval = 5000, group = gPerformance)
+const int perf_htf_runtime_bars = 5000
+const int perf_cisd_runtime_bars = 200
+htf_auto_bucket_cur = QTU.htfAutoBucket(tf_sec, TF_SEC_3, TF_SEC_15, TF_SEC_60, TF_SEC_240, TF_SEC_D, TF_SEC_W, TF_SEC_M, TF_SEC_3M)
+
+// CISD engine
+//==============================================================================
+
+// Host contract
+// Inputs: confirmed GXV sweep/C2 state and chart-confirmed OHLC history.
+// Outputs: one immutable formation payload, an explicit pending path, and an owned confirmed event.
+// Repaint policy: confirmed transitions require barstate.isconfirmed; early paths are intrabar-only and never enter the confirmed registry.
+// Invalidation owner: ConfirmedCisd manages post-confirm invalidation and destroys all drawings through CisdProjection.
+const int CISD_PHASE_TRACKING = 1
+const int CISD_PHASE_CONFIRMED = 2
+const int CISD_PHASE_REJECTED = 3
+const string CISD_DUPLICATE_POLICY = 'NEWEST_C2_THEN_HTF_SOURCE'
+
+type CisdFormation
+    string source_key = ''
+    int phase = na
+    int pane = 0
+    int tf_sec = na
+    int owner = 0
+    int dir = 0
+    int htf_c2_idx = na
+    int c2_bar = na
+    float c2_ext = na
+    float level = na
+    float inv_level = na
+    float body_high = na
+    float body_low = na
+    float wick_high = na
+    float wick_low = na
+    int anchor_bar = na
+    int anchor_time = na
+    int confirm_bar = na
+    int confirm_time = na
+    int source_x1 = na
+    float source_y = na
+
+type PendingCisd
+    bool ok = false
+    bool early = false
+    CisdFormation payload = na
+    float displacement_level = na
+    bool displacement_seen = false
+
+type CisdProjection
+    line cisd_line = na
+    array<line> lines
+    array<box> boxes
+    array<label> labels
+
+type ConfirmedCisd
+    CisdFormation payload
+    CisdProjection drawings
+    int stop_time = na
+    int formed_bar = na
+    float displacement_level = na
+    bool displacement_seen = false
+    bool pending_invalidation = false
+
+type SdProjectionSource
+    bool ok = false
+    int dir = 0
+    int recency_bar = na
+    int anchor_bar = na
+    float body_high = na
+    float body_low = na
+    float wick_high = na
+    float wick_low = na
+
+var array<CisdFormation> cisd_formation_registry = array.new<CisdFormation>()
+var array<ConfirmedCisd> cisd_event_registry = array.new<ConfirmedCisd>()
+const int cisd_touch_search_bars = 30
+const int RECENT_BAR_WINDOW = 50
+const int CISD_TOUCH_LOOKBACK_CAP = RECENT_BAR_WINDOW
+const int CISD_CORE_SCAN_CAP = RECENT_BAR_WINDOW
+const int HTF_CISD_OFFSET_CAP = RECENT_BAR_WINDOW
+const int HTF_SWEEP_STATE_CANDLES = 16
+const int CISD_FORMATION_REGISTRY_CAP = 128
+const int HTF_CISD_CONFIRM_MAX_BARS = 20
+const int HTF_CISD_CORE_SCANBACK_BARS = 15
+
+cisd_bar_ms_cur = na(tf_sec) or tf_sec <= 0 ? 60000 : tf_sec * 1000
+cisd_bar_ms_cur := na(time[1]) or time <= time[1] or time - time[1] > cisd_bar_ms_cur * 2 ? cisd_bar_ms_cur : int(time - time[1])
+
+f_cisd_projection_new() =>
+    CisdProjection.new(cisd_line = na, lines = array.new<line>(), boxes = array.new<box>(), labels = array.new<label>())
+method destroy(CisdProjection this) =>
+    if not na(this.cisd_line)
+        line.delete(this.cisd_line)
+        this.cisd_line := na
+    while this.lines.size() > 0
+        line.delete(this.lines.pop())
+    while this.boxes.size() > 0
+        box.delete(this.boxes.pop())
+    while this.labels.size() > 0
+        label.delete(this.labels.pop())
+    this
+method destroy(ConfirmedCisd this) =>
+    this.drawings.destroy()
+    this
+cisd_render_active_line(line drawing, int anchor_time, int stop_time, float level, color line_color) =>
+    result = drawing
+    if not na(anchor_time) and not na(stop_time) and not na(level)
+        if na(result)
+            result := line.new(x1 = anchor_time, y1 = level, x2 = stop_time, y2 = level, xloc = xloc.bar_time, color = line_color, width = cisd_line_width)
+        else
+            line.set_xy1(result, anchor_time, level)
+            line.set_xy2(result, stop_time, level)
+            line.set_color(result, line_color)
+            line.set_width(result, cisd_line_width)
+    result
+htf_cisd_manage_active() =>
+    dirty = false
+    event_count = cisd_event_registry.size()
+    if event_count > 0
+        for event_index = event_count - 1 to 0
+            event = cisd_event_registry.get(event_index)
+            formation = event.payload
+            drawing = event.drawings.cisd_line
+            level = formation.level
+            direction = formation.dir
+            invalidation_level = na(formation.inv_level) ? level : formation.inv_level
+            visible_color = event.displacement_seen ? (direction == 1 ? cisd_bull_clr : cisd_bear_clr) : #FFFFFF00
+            live_now = QTU.cisdInvalidLive(formation.confirm_time, time)
+            invalidation_eligible = not na(event.formed_bar) and bar_index > event.formed_bar
+            if barstate.isconfirmed
+                invalidated = invalidation_eligible and QTU.cisdPostConfirmInvalid(direction, invalidation_level, formation.c2_ext, event.formed_bar, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW, barstate.isconfirmed)
+                if invalidated
+                    event.destroy()
+                    cisd_event_registry.remove(event_index)
+                    dirty := true
+                else
+                    if not event.displacement_seen and not na(formation.confirm_bar) and not na(event.displacement_level) and bar_index > formation.confirm_bar
+                        event.displacement_seen := direction == 1 ? close > event.displacement_level : close < event.displacement_level
+                        dirty := dirty or event.displacement_seen
+                    stale_without_displacement = not event.displacement_seen and not na(formation.confirm_bar) and bar_index - formation.confirm_bar >= 50
+                    if stale_without_displacement
+                        event.destroy()
+                        cisd_event_registry.remove(event_index)
+                        dirty := true
+                    else
+                        if event.pending_invalidation
+                            event.pending_invalidation := false
+                            dirty := true
+                        next_stop = QTU.cisdNextStopTime(event.stop_time, formation.anchor_time, level, int(time), int(time[1]), open, close, barstate.isconfirmed)
+                        dirty := dirty or next_stop != event.stop_time
+                        event.stop_time := next_stop
+                        event.drawings.cisd_line := cisd_render_active_line(drawing, formation.anchor_time, event.stop_time, level, visible_color)
+                        cisd_event_registry.set(event_index, event)
+            else
+                pending_now = invalidation_eligible and live_now and ((direction == 1 ? low < invalidation_level : direction == -1 ? high > invalidation_level : false) or (not na(formation.c2_ext) and QTU.cisdC2Invalidates(direction, formation.c2_ext, low, high)))
+                if pending_now
+                    if not event.pending_invalidation
+                        event.pending_invalidation := true
+                        dirty := true
+                    event.drawings.cisd_line := cisd_render_active_line(drawing, formation.anchor_time, event.stop_time, level, #FFFFFF00)
+                else
+                    if event.pending_invalidation
+                        event.pending_invalidation := false
+                        dirty := true
+                    event.drawings.cisd_line := cisd_render_active_line(drawing, formation.anchor_time, event.stop_time, level, visible_color)
+                cisd_event_registry.set(event_index, event)
+    dirty
+cisd_event_pop_oldest_cycle() =>
+    if cisd_event_registry.size() > 0
+        oldest = cisd_event_registry.pop()
+        oldest.destroy()
+cisd_event_cleanup_state_cap() =>
+    while cisd_event_registry.size() > CISD_EVENT_STATE_CAP
+        cisd_event_pop_oldest_cycle()
+    0
+cisd_render_display_cap() =>
+    displayed = 0
+    event_index = 0
+    while event_index < cisd_event_registry.size()
+        event = cisd_event_registry.get(event_index)
+        drawing = event.drawings.cisd_line
+        if not na(drawing)
+            if event.displacement_seen and not event.pending_invalidation
+                displayed += 1
+                base_color = event.payload.dir == 1 ? cisd_bull_clr : cisd_bear_clr
+                line.set_color(drawing, displayed <= cisd_display_cap ? base_color : #FFFFFF00)
+            else
+                line.set_color(drawing, #FFFFFF00)
+        event_index += 1
+    0
+cisd_event_clear_all() =>
+    while cisd_event_registry.size() > 0
+        cisd_event_pop_oldest_cycle()
+    0
+htf_cisd_update_active_lines(bool runtime_on) =>
+    if not cisd_show
+        if cisd_event_registry.size() > 0
+            cisd_event_clear_all()
+    else
+        if runtime_on and cisd_event_registry.size() > 0
+            htf_cisd_manage_active()
+        if cisd_event_registry.size() > 0
+            cisd_render_display_cap()
+    0
+
+//==============================================================================
+// HTF candles, sweeps, labels, and pane rendering
+//==============================================================================
+
+type UDT_Store
+	array<line> bin_ln
+	array<box> bin_box
+	array<label> bin_lbl
+type UDT_Sweep
+    string tf
+    int x1
+    float y
+    int x2
+    bool bull
+    bool invalidated = false
+    int invalidated_on
+    bool removed = false
+    bool formed = false
+    int cross_idx = na
+    int c2_left = na
+    int c2_right = na
+    bool cross_triggered = false
+    int last_closed_eval_o_idx = na
+    line ltf_line = na
+    line htf_line = na
+    string cisd_source_key = ''
+type UDT_HTF_Candle
+	string tf
+	float o
+	float c
+	float h
+	float l
+	int o_idx
+	int c_idx
+	int h_idx
+	int l_idx
+	int ot
+	int ct
+	int candle_left
+	int candle_rigth
+	float candle_top
+	float candle_bottom
+	int wick_x
+	int shift
+	bool is_closed
+	array<UDT_Sweep> htf_sweeps
+	array<UDT_Sweep> ltf_sweeps
+	bool bull
+	bool bull_sweep
+	bool bear_sweep
+	line low_line
+	line high_line
+	int high_break_idx = na
+	int low_break_idx = na
+type DealingRangeVisuals
+    array<line> lines
+    array<label> labels
+    box premium_box = na
+    box discount_box = na
+type KeyLevelVisuals
+    line high_line = na
+    line low_line = na
+    label high_label = na
+    label low_label = na
+const string HTF_CUSTOM_DAILY_TZ = 'America/New_York'
+htf_daily_1800_time = time(timeframe.period, '1800-1801:1234567', HTF_CUSTOM_DAILY_TZ)
+htf_daily_midnight_begins = dayofweek(time, HTF_CUSTOM_DAILY_TZ) != dayofweek(time[1], HTF_CUSTOM_DAILY_TZ)
+htf_daily_1800_begins = not na(htf_daily_1800_time) and na(htf_daily_1800_time[1])
+htf_custom_daily_begin = htf_custom_daily_time == '18:00' ? htf_daily_1800_begins : htf_daily_midnight_begins
+var bin = UDT_Store.new(bin_ln = array.new<line>(), bin_box = array.new<box>(), bin_lbl = array.new<label>())
+var htf_1_candles = array.new<UDT_HTF_Candle>()
+var htf_2_candles = array.new<UDT_HTF_Candle>()
+var htf_3_candles = array.new<UDT_HTF_Candle>()
+var DealingRangeVisuals dealing_range_visuals = DealingRangeVisuals.new(array.new<line>(5), array.new<label>(5))
+var KeyLevelVisuals key_level_visuals = KeyLevelVisuals.new()
+method reset_draw_refs(array<UDT_HTF_Candle> candles) =>
+    for candle in candles
+        candle.low_line := na
+        candle.high_line := na
+        for sweep in candle.ltf_sweeps
+            sweep.ltf_line := na
+            sweep.htf_line := na
+        for sweep in candle.htf_sweeps
+            sweep.ltf_line := na
+            sweep.htf_line := na
+method clean_bin(UDT_Store store) =>
+    for obj in store.bin_ln
+        obj.delete()
+    for obj in store.bin_box
+        obj.delete()
+    for obj in store.bin_lbl
+        obj.delete()
+    store.bin_ln.clear()
+    store.bin_box.clear()
+    store.bin_lbl.clear()
+    htf_1_candles.reset_draw_refs()
+    htf_2_candles.reset_draw_refs()
+    htf_3_candles.reset_draw_refs()
+
+
+htf_live_eval_ok() =>
+    barstate.isrealtime or barstate.isconfirmed
+f_cisd_source_key(string source_tf, int source_x, bool high_sweep) =>
+    source_tf + '|' + str.tostring(source_x) + '|' + (high_sweep ? 'H' : 'L')
+htf_cisd_sweep_permanent_invalid(UDT_Sweep sweep) =>
+    not na(sweep.invalidated_on)
+htf_cisd_sweep_active_valid(UDT_Sweep sweep) =>
+    inside_side = not na(sweep.y) and (sweep.bull ? close <= sweep.y : close >= sweep.y)
+    not na(sweep.y) and not htf_cisd_sweep_permanent_invalid(sweep) and inside_side
+f_cisd_formation_index(string source_key, int pane, int owner) =>
+    found_index = -1
+    formation_count = cisd_formation_registry.size()
+    if source_key != '' and formation_count > 0
+        for formation_index = formation_count - 1 to 0
+            formation = cisd_formation_registry.get(formation_index)
+            if formation.source_key == source_key and formation.pane == pane and formation.owner == owner
+                found_index := formation_index
+                break
+    found_index
+f_cisd_ensure_formation(UDT_Sweep sweep, int pane, int tf_seconds, int owner, int direction) =>
+    source_key = sweep.cisd_source_key == '' ? f_cisd_source_key(sweep.tf, sweep.x1, sweep.bull) : sweep.cisd_source_key
+    formation_index = f_cisd_formation_index(source_key, pane, owner)
+    if formation_index < 0
+        cisd_formation_registry.push(CisdFormation.new(source_key = source_key, phase = CISD_PHASE_TRACKING, pane = pane, tf_sec = tf_seconds, owner = owner, dir = direction, source_x1 = sweep.x1, source_y = sweep.y))
+        formation_index := cisd_formation_registry.size() - 1
+    formation_index
+method clear_payload(CisdFormation this) =>
+    this.level := na
+    this.inv_level := na
+    this.body_high := na
+    this.body_low := na
+    this.wick_high := na
+    this.wick_low := na
+    this.anchor_bar := na
+    this.anchor_time := na
+    this.confirm_bar := na
+    this.confirm_time := na
+    this
+method transition_tracking(CisdFormation this, int direction, int htf_c2_index, int c2_bar, float c2_extreme) =>
+    this.phase := CISD_PHASE_TRACKING
+    this.dir := direction
+    this.htf_c2_idx := htf_c2_index
+    this.c2_bar := c2_bar
+    this.c2_ext := c2_extreme
+    this.clear_payload()
+method transition_pending(CisdFormation this) =>
+    this.phase := CISD_PHASE_TRACKING
+    this
+method transition_confirmed(CisdFormation this) =>
+    this.phase := CISD_PHASE_CONFIRMED
+    this
+method transition_rejected(CisdFormation this, bool clear_source_lock) =>
+    this.phase := CISD_PHASE_REJECTED
+    if clear_source_lock
+        this.dir := 0
+        this.htf_c2_idx := na
+        this.c2_bar := na
+        this.c2_ext := na
+    this.clear_payload()
+htf_cisd_active_event_exists(string source_key, int pane, int owner) =>
+    found = false
+    event_count = cisd_event_registry.size()
+    if source_key != '' and event_count > 0
+        for event_index = event_count - 1 to 0
+            event = cisd_event_registry.get(event_index)
+            if event.payload.source_key == source_key and event.payload.pane == pane and event.payload.owner == owner
+                found := true
+                break
+    found
+htf_cisd_event_consumed(string source_key, int pane, int owner) =>
+    htf_cisd_active_event_exists(source_key, pane, owner)
+htf_cisd_prune_formations() =>
+    min_source_bar = QTU.cisdRecentMinBar(bar_index, RECENT_BAR_WINDOW)
+    formation_count = cisd_formation_registry.size()
+    if formation_count > 0
+        for formation_index = formation_count - 1 to 0
+            formation = cisd_formation_registry.get(formation_index)
+            stale = formation.source_x1 < min_source_bar
+            if stale and not htf_cisd_active_event_exists(formation.source_key, formation.pane, formation.owner)
+                cisd_formation_registry.remove(formation_index)
+    while cisd_formation_registry.size() > CISD_FORMATION_REGISTRY_CAP
+        cisd_formation_registry.remove(0)
+    0
+htf_cisd_source_dead_before_bar(UDT_Sweep sweep, int origin_bar) =>
+    not na(sweep.invalidated_on) and (na(origin_bar) or sweep.invalidated_on <= origin_bar)
+htf_cisd_source_dead_before_confirm(UDT_Sweep sweep, CisdFormation formation) =>
+    htf_cisd_source_dead_before_bar(sweep, formation.confirm_bar)
+htf_cisd_c2_extreme_branched(int direction, int c2_bar, float c2_extreme) =>
+    branched = false
+    if direction != 0 and not na(c2_bar) and not na(c2_extreme)
+        span = math.min(bar_index - c2_bar, RECENT_BAR_WINDOW)
+        if span > 0
+            for offset = 0 to span - 1
+                if bar_index - offset > c2_bar
+                    if direction == 1 ? low[offset] < c2_extreme : high[offset] > c2_extreme
+                        branched := true
+                        break
+    branched
+htf_cisd_c2_extreme_branched_in_pane(array<UDT_HTF_Candle> candles, int direction, int c2_bar, float c2_extreme) =>
+    branched = false
+    if direction != 0 and not na(c2_bar) and not na(c2_extreme) and candles.size() > 0
+        for candle in candles
+            if candle.c_idx > c2_bar
+                if direction == 1 ? candle.l < c2_extreme : candle.h > c2_extreme
+                    branched := true
+                    break
+    branched
+htf_cisd_inv_level_veto(int direction, float invalidation_level, int anchor_bar) =>
+    direction != 0 and not na(invalidation_level) and not na(anchor_bar) and QTU.cisdPostConfirmInvalid(direction, invalidation_level, na, anchor_bar, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW, barstate.isconfirmed)
+htf_cisd_candidate_better(PendingCisd candidate, PendingCisd current) =>
+    better = candidate.ok and not current.ok
+    if candidate.ok and current.ok
+        candidate_c2 = nz(candidate.payload.c2_bar, -1)
+        current_c2 = nz(current.payload.c2_bar, -1)
+        better := candidate_c2 > current_c2
+        if not better and candidate_c2 == current_c2
+            candidate_htf_source = nz(candidate.payload.htf_c2_idx, -1)
+            current_htf_source = nz(current.payload.htf_c2_idx, -1)
+            better := candidate_htf_source > current_htf_source
+    better
+f_cisd_set_ranges_from_locked_c2(int _c2_bar, int _dir) =>
+    float set_high = na
+    float set_low = na
+    float set_wick_high = na
+    float set_wick_low = na
+    int anchor_bar = na
+    if not na(_c2_bar)
+        scan_left_bar = math.max(QTU.cisdRecentMinBar(bar_index, RECENT_BAR_WINDOW), _c2_bar - HTF_CISD_CORE_SCANBACK_BARS)
+        off_c2 = QTU.cisdAbsBarToOff(_c2_bar, CISD_CORE_SCAN_CAP, bar_index, RECENT_BAR_WINDOW)
+        off_left = QTU.cisdAbsBarToOff(scan_left_bar, CISD_CORE_SCAN_CAP, bar_index, RECENT_BAR_WINDOW)
+        if not na(off_c2) and not na(off_left) and off_left >= off_c2
+            scan_upclose = _dir == -1
+            max_candles = math.max(1, cisd_max_candles)
+            max_k = math.min(off_left - off_c2, CISD_CORE_SCAN_CAP - off_c2)
+            c2_upclose = close[off_c2] > open[off_c2]
+            c2_downclose = close[off_c2] < open[off_c2]
+            start_k = (scan_upclose ? c2_upclose : c2_downclose) ? 0 : 1
+            count = 0
+            started = false
+            if start_k <= max_k
+                for k = 0 to CISD_CORE_SCAN_CAP
+                    if k > max_k
+                        break
+                    if k >= start_k
+                        idx = off_c2 + k
+                        if idx > CISD_CORE_SCAN_CAP or na(time[idx])
+                            break
+                        upclose = close[idx] > open[idx]
+                        downclose = close[idx] < open[idx]
+                        accepted = scan_upclose ? upclose : downclose
+                        opposite = scan_upclose ? downclose : upclose
+                        if accepted
+                            started := true
+                            count += 1
+                            high_endpoint = _dir == 1 ? open[idx] : close[idx]
+                            low_endpoint = _dir == 1 ? close[idx] : open[idx]
+                            set_high := na(set_high) ? high_endpoint : math.max(set_high, high_endpoint)
+                            set_low := na(set_low) ? low_endpoint : math.min(set_low, low_endpoint)
+                            set_wick_high := na(set_wick_high) ? high[idx] : math.max(set_wick_high, high[idx])
+                            set_wick_low := na(set_wick_low) ? low[idx] : math.min(set_wick_low, low[idx])
+                            anchor_bar := bar_index - idx
+                            if count == max_candles
+                                break
+                        else if started and opposite
+                            break
+    [set_high, set_low, set_wick_high, set_wick_low, anchor_bar]
+
+htf_cisd_maintain_pane(array<UDT_HTF_Candle> candles, int pane, bool enabled) =>
+    ready = false
+    candle_count = candles.size()
+    if enabled and candle_count > 1
+        max_candle_index = math.min(candle_count - 1, HTF_SWEEP_STATE_CANDLES - 1)
+        if max_candle_index >= 1
+            for candle_index = max_candle_index to 1
+                c1 = candles.get(candle_index)
+                c2 = candles.get(candle_index - 1)
+                sweep_count = c1.ltf_sweeps.size()
+                if sweep_count > 0
+                    for sweep_index = 0 to sweep_count - 1
+                        sweep = c1.ltf_sweeps.get(sweep_index)
+                        direction = sweep.bull ? -1 : 1
+                        formation_index = f_cisd_ensure_formation(sweep, pane, na, 0, direction)
+                        formation = cisd_formation_registry.get(formation_index)
+                        changed = false
+                        sweep_valid_for_cisd = htf_cisd_sweep_active_valid(sweep)
+                        if formation.phase != CISD_PHASE_REJECTED
+                            if sweep_valid_for_cisd and c2.is_closed
+                                c2_extreme = direction == 1 ? c2.l : c2.h
+                                [locked_bar, locked_time, locked_extreme] = QTU.cisdFindLockedC2(sweep.c2_left, sweep.c2_right, direction, c2_extreme, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW, barstate.isconfirmed, syminfo.mintick)
+                                if not na(locked_bar) and not na(locked_time) and not na(locked_extreme)
+                                    lock_changed = formation.dir != direction or formation.c2_bar != locked_bar or not QTU.cisdPriceMatch(formation.c2_ext, locked_extreme, syminfo.mintick)
+                                    if lock_changed
+                                        formation.transition_tracking(direction, c2.c_idx, locked_bar, locked_extreme)
+                                        changed := true
+                                    if formation.phase == CISD_PHASE_TRACKING
+                                        [core_level, core_time, invalidation_level] = QTU.cisdPickCoreFromLockedC2(formation.c2_bar, formation.dir, HTF_CISD_CORE_SCANBACK_BARS, CISD_CORE_SCAN_CAP, bar_index, RECENT_BAR_WINDOW, cisd_max_candles)
+                                        [body_high, body_low, wick_high, wick_low, anchor_bar] = f_cisd_set_ranges_from_locked_c2(formation.c2_bar, formation.dir)
+                                        payload_changed = not QTU.cisdPriceMatch(formation.level, core_level, syminfo.mintick) or not QTU.cisdPriceMatch(formation.inv_level, invalidation_level, syminfo.mintick) or not QTU.cisdPriceMatch(formation.body_high, body_high, syminfo.mintick) or not QTU.cisdPriceMatch(formation.body_low, body_low, syminfo.mintick) or not QTU.cisdPriceMatch(formation.wick_high, wick_high, syminfo.mintick) or not QTU.cisdPriceMatch(formation.wick_low, wick_low, syminfo.mintick) or formation.anchor_bar != anchor_bar or formation.anchor_time != core_time
+                                        payload_ready = not na(core_level) and not na(core_time) and not na(invalidation_level) and not na(body_high) and not na(body_low) and not na(wick_high) and not na(wick_low) and not na(anchor_bar)
+                                        if payload_ready
+                                            if payload_changed
+                                                formation.level := core_level
+                                                formation.inv_level := invalidation_level
+                                                formation.body_high := body_high
+                                                formation.body_low := body_low
+                                                formation.wick_high := wick_high
+                                                formation.wick_low := wick_low
+                                                formation.anchor_bar := anchor_bar
+                                                formation.anchor_time := core_time
+                                                formation.confirm_bar := na
+                                                formation.confirm_time := na
+                                                changed := true
+                                            if na(formation.confirm_bar)
+                                                [confirm_bar, confirm_time] = QTU.cisdFindConfirmAfterC2(formation.c2_bar, formation.level, formation.dir, HTF_CISD_CONFIRM_MAX_BARS, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW, barstate.isconfirmed)
+                                                if not na(confirm_bar) and not na(confirm_time)
+                                                    formation.confirm_bar := confirm_bar
+                                                    formation.confirm_time := confirm_time
+                                                    changed := true
+                                        else if not na(formation.level) or not na(formation.inv_level) or not na(formation.body_high) or not na(formation.body_low) or not na(formation.wick_high) or not na(formation.wick_low) or not na(formation.anchor_bar) or not na(formation.anchor_time) or not na(formation.confirm_bar) or not na(formation.confirm_time)
+                                            formation.clear_payload()
+                                            changed := true
+                                    if htf_cisd_source_dead_before_confirm(sweep, formation)
+                                        formation.transition_rejected(false)
+                                        changed := true
+                            else if formation.phase == CISD_PHASE_TRACKING and htf_cisd_source_dead_before_confirm(sweep, formation)
+                                formation.transition_rejected(true)
+                                changed := true
+                        consumed_active = htf_cisd_event_consumed(formation.source_key, pane, formation.owner)
+                        if formation.phase == CISD_PHASE_TRACKING and consumed_active
+                            formation.transition_confirmed()
+                            changed := true
+                        else if formation.phase == CISD_PHASE_CONFIRMED and not consumed_active and not htf_cisd_source_dead_before_confirm(sweep, formation) and not htf_cisd_c2_extreme_branched(formation.dir, formation.c2_bar, formation.c2_ext) and not htf_cisd_c2_extreme_branched_in_pane(candles, formation.dir, formation.c2_bar, formation.c2_ext)
+                            formation.transition_pending()
+                            changed := true
+                        ready := ready or formation.phase == CISD_PHASE_TRACKING
+                        if changed
+                            cisd_formation_registry.set(formation_index, formation)
+    htf_cisd_prune_formations()
+    ready
+htf_cisd_select_pane(array<UDT_HTF_Candle> candles, int pane, bool enabled, PendingCisd current_best) =>
+    best = current_best
+    candle_count = candles.size()
+    if enabled and candle_count > 1
+        max_candle_index = math.min(candle_count - 1, HTF_SWEEP_STATE_CANDLES - 1)
+        if max_candle_index >= 1
+            for candle_index = max_candle_index to 1
+                c1 = candles.get(candle_index)
+                for sweep in c1.ltf_sweeps
+                    formation_index = f_cisd_formation_index(sweep.cisd_source_key, pane, 0)
+                    if formation_index >= 0
+                        formation = cisd_formation_registry.get(formation_index)
+                        changed = false
+                        if formation.phase == CISD_PHASE_TRACKING
+                            consumed = htf_cisd_event_consumed(formation.source_key, pane, formation.owner)
+                            source_dead = htf_cisd_source_dead_before_confirm(sweep, formation)
+                            if consumed
+                                formation.transition_confirmed()
+                                changed := true
+                            else if source_dead
+                                formation.transition_rejected(false)
+                                changed := true
+                            else if htf_cisd_c2_extreme_branched(formation.dir, formation.c2_bar, formation.c2_ext) or htf_cisd_c2_extreme_branched_in_pane(candles, formation.dir, formation.c2_bar, formation.c2_ext)
+                                formation.transition_rejected(true)
+                                changed := true
+                            else if htf_cisd_inv_level_veto(formation.dir, formation.inv_level, formation.anchor_bar)
+                                formation.transition_rejected(false)
+                                changed := true
+                            else if not na(formation.level) and not na(formation.inv_level) and not na(formation.anchor_time) and not na(formation.confirm_bar) and formation.confirm_bar <= bar_index
+                                displacement_level = QTU.cisdDispLevel(formation.dir, formation.confirm_bar, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW)
+                                displacement_seen = QTU.cisdDispSeen(formation.dir, formation.confirm_bar, displacement_level, HTF_CISD_OFFSET_CAP, bar_index, RECENT_BAR_WINDOW, barstate.isconfirmed, 50)
+                                candidate = PendingCisd.new(ok = true, early = false, payload = formation, displacement_level = displacement_level, displacement_seen = displacement_seen)
+                                if htf_cisd_candidate_better(candidate, best)
+                                    best := candidate
+                        if changed
+                            cisd_formation_registry.set(formation_index, formation)
+    best
+htf_cisd_select_early_pane(array<UDT_HTF_Candle> candles, int pane, bool enabled, PendingCisd current_best) =>
+    best = current_best
+    candle_count = candles.size()
+    if enabled and candle_count > 1 and not barstate.isconfirmed
+        max_candle_index = math.min(candle_count - 1, HTF_SWEEP_STATE_CANDLES - 1)
+        if max_candle_index >= 1
+            for candle_index = max_candle_index to 1
+                c1 = candles.get(candle_index)
+                for sweep in c1.ltf_sweeps
+                    formation_index = f_cisd_formation_index(sweep.cisd_source_key, pane, 0)
+                    if formation_index >= 0
+                        formation = cisd_formation_registry.get(formation_index)
+                        payload_ready = formation.phase == CISD_PHASE_TRACKING and na(formation.confirm_bar) and not na(formation.level) and not na(formation.inv_level) and not na(formation.anchor_time) and not na(formation.c2_bar)
+                        if payload_ready
+                            consumed = htf_cisd_event_consumed(formation.source_key, pane, formation.owner)
+                            source_dead = htf_cisd_source_dead_before_confirm(sweep, formation)
+                            extreme_branched = htf_cisd_c2_extreme_branched(formation.dir, formation.c2_bar, formation.c2_ext) or htf_cisd_c2_extreme_branched_in_pane(candles, formation.dir, formation.c2_bar, formation.c2_ext)
+                            inv_vetoed = htf_cisd_inv_level_veto(formation.dir, formation.inv_level, formation.anchor_bar)
+                            early_cross = bar_index > formation.c2_bar and (formation.dir == 1 ? close > formation.level : formation.dir == -1 ? close < formation.level : false)
+                            if not consumed and not source_dead and not extreme_branched and not inv_vetoed and early_cross
+                                candidate = PendingCisd.new(ok = true, early = true, payload = formation)
+                                if htf_cisd_candidate_better(candidate, best)
+                                    best := candidate
+    best
+f_draw_on_chart_early_cisd(bool pane1_enabled, bool pane2_enabled, bool pane3_enabled) =>
+    best = PendingCisd.new()
+    if cisd_show and cisd_early_show and not barstate.isconfirmed
+        best := htf_cisd_select_early_pane(htf_1_candles, 1, pane1_enabled, best)
+        best := htf_cisd_select_early_pane(htf_2_candles, 2, pane2_enabled, best)
+        best := htf_cisd_select_early_pane(htf_3_candles, 3, pane3_enabled, best)
+        if best.ok
+            formation = best.payload
+            early_x = math.max(formation.anchor_time + 1, int(time))
+            early_line = line.new(x1 = formation.anchor_time, y1 = formation.level, x2 = early_x, y2 = formation.level, xloc = xloc.bar_time, color = formation.dir == 1 ? cisd_bull_clr : cisd_bear_clr, style = cisd_early_line_style, width = cisd_early_line_width)
+            bin.bin_ln.push(early_line)
+    best
+f_parse_sd_projection_levels(string _input) =>
+    levels = array.new<float>()
+    tokens = str.split(_input, ',')
+    token_count = tokens.size()
+    if token_count > 0
+        for i = 0 to token_count - 1
+            token = str.replace_all(str.replace_all(tokens.get(i), ' ', ''), '+', '')
+            value = str.tonumber(token)
+            if not na(value) and value > 0
+                duplicate = false
+                level_count = levels.size()
+                if level_count > 0
+                    for j = 0 to level_count - 1
+                        if math.abs(levels.get(j) - value) <= 0.000001
+                            duplicate := true
+                            break
+                if not duplicate
+                    levels.push(value)
+                    if levels.size() >= SD_PROJECTION_LEVEL_CAP
+                        break
+    levels
+
+f_sd_source_better(SdProjectionSource _candidate, SdProjectionSource _current) =>
+    _candidate.ok and (not _current.ok or nz(_candidate.recency_bar, -1) > nz(_current.recency_bar, -1))
+
+f_sd_source_from_candidate(PendingCisd candidate) =>
+    source = SdProjectionSource.new()
+    formation = candidate.payload
+    valid = candidate.ok and not na(formation.anchor_bar) and not na(formation.body_high) and not na(formation.body_low) and not na(formation.wick_high) and not na(formation.wick_low)
+    if valid
+        source.ok := true
+        source.dir := formation.dir
+        source.recency_bar := formation.c2_bar
+        source.anchor_bar := formation.anchor_bar
+        source.body_high := formation.body_high
+        source.body_low := formation.body_low
+        source.wick_high := formation.wick_high
+        source.wick_low := formation.wick_low
+    source
+f_latest_displaying_on_chart_sd() =>
+    source = SdProjectionSource.new()
+    if cisd_show
+        event_count = cisd_event_registry.size()
+        event_index = 0
+        while event_index < event_count and not source.ok
+            event = cisd_event_registry.get(event_index)
+            formation = event.payload
+            valid_display = event.displacement_seen and not event.pending_invalidation and not na(event.drawings.cisd_line) and not na(formation.body_high) and not na(formation.body_low) and not na(formation.wick_high) and not na(formation.wick_low) and not na(formation.anchor_bar)
+            if valid_display
+                source.ok := true
+                source.dir := formation.dir
+                source.recency_bar := formation.c2_bar
+                source.anchor_bar := formation.anchor_bar
+                source.body_high := formation.body_high
+                source.body_low := formation.body_low
+                source.wick_high := formation.wick_high
+                source.wick_low := formation.wick_low
+            event_index += 1
+    source
+htf_cisd_spawn_from_sweeps(bool pane1_enabled, bool pane2_enabled, bool pane3_enabled) =>
+    spawned = false
+    runtime_on = QTU.runtimeOn(perf_cisd_runtime_bars, max_calc_bars, bar_index, last_bar_index)
+    spawn_gate = runtime_on and cisd_show and htf_live_eval_ok()
+    if spawn_gate
+        ready1 = htf_cisd_maintain_pane(htf_1_candles, 1, pane1_enabled)
+        ready2 = htf_cisd_maintain_pane(htf_2_candles, 2, pane2_enabled)
+        ready3 = htf_cisd_maintain_pane(htf_3_candles, 3, pane3_enabled)
+        best = PendingCisd.new()
+        if ready1
+            best := htf_cisd_select_pane(htf_1_candles, 1, pane1_enabled, best)
+        if ready2
+            best := htf_cisd_select_pane(htf_2_candles, 2, pane2_enabled, best)
+        if ready3
+            best := htf_cisd_select_pane(htf_3_candles, 3, pane3_enabled, best)
+        if best.ok
+            formation = best.payload
+            if not htf_cisd_event_consumed(formation.source_key, formation.pane, formation.owner)
+                stop_time = QTU.cisdFindStopTime(formation.anchor_time, formation.level, cisd_bar_ms_cur, cisd_touch_search_bars, cisd_extend_bars, CISD_TOUCH_LOOKBACK_CAP, int(time), barstate.isconfirmed)
+                drawings = f_cisd_projection_new()
+                confirmed = ConfirmedCisd.new(payload = formation, drawings = drawings, stop_time = stop_time, formed_bar = bar_index, displacement_level = best.displacement_level, displacement_seen = best.displacement_seen, pending_invalidation = false)
+                confirmed_color = best.displacement_seen ? (formation.dir == 1 ? cisd_bull_clr : cisd_bear_clr) : #FFFFFF00
+                confirmed.drawings.cisd_line := cisd_render_active_line(confirmed.drawings.cisd_line, formation.anchor_time, confirmed.stop_time, formation.level, confirmed_color)
+                cisd_event_registry.unshift(confirmed)
+                formation.transition_confirmed()
+                formation_index = f_cisd_formation_index(formation.source_key, formation.pane, formation.owner)
+                if formation_index >= 0
+                    cisd_formation_registry.set(formation_index, formation)
+                cisd_event_cleanup_state_cap()
+                cisd_render_display_cap()
+                spawned := true
+    spawned
+method position_htf_sweeps(array<UDT_HTF_Candle> htf_candles) =>
+    count = htf_candles.size()
+    if count > 1
+        for [i, candle] in htf_candles
+            for [j, sweep] in candle.htf_sweeps
+                sweep.x1 := candle.wick_x
+                if i > 1
+                    c3 = htf_candles.get(i - 2)
+                    sweep.x2 := c3.wick_x
+                else if i > 0
+                    c2 = htf_candles.get(i - 1)
+                    sweep.x2 := c2.candle_rigth
+                else
+                    sweep.x2 := candle.candle_rigth + 2
+    htf_candles
+method invalidate_sweep(UDT_Sweep sweep, UDT_HTF_Candle c2) =>
+    not na(sweep.y) and (sweep.bull ? c2.c > sweep.y : c2.c < sweep.y)
+method add_sweep_pair(UDT_HTF_Candle c1, UDT_HTF_Candle c2, bool bull) =>
+    brk = bull ? c2.high_break_idx : c2.low_break_idx
+    x1 = bull ? c1.h_idx : c1.l_idx
+    y = bull ? c1.h : c1.l
+    left = not na(brk) ? math.max(c2.o_idx, brk) : c2.o_idx
+    source_key = f_cisd_source_key(c1.tf, x1, bull)
+    htf_sweep = UDT_Sweep.new(x1=x1, x2=c2.c_idx, y=y, c2_left=left, c2_right=c2.c_idx, bull=bull, tf=c1.tf, cisd_source_key=source_key)
+    ltf_sweep = UDT_Sweep.new(x1=x1, x2=c2.c_idx, y=y, c2_left=left, c2_right=c2.c_idx, bull=bull, tf=c1.tf, cisd_source_key=source_key)
+    htf_sweep.cross_idx := brk
+    htf_sweep.cross_triggered := true
+    ltf_sweep.cross_idx := brk
+    ltf_sweep.cross_triggered := true
+    c1.htf_sweeps.push(htf_sweep)
+    c1.ltf_sweeps.push(ltf_sweep)
+    if bull
+        c1.bull_sweep := true
+    else
+        c1.bear_sweep := true
+    c1
+method invalidate_sweeps(array<UDT_HTF_Candle> htf_candles, bool full_rescan) =>
+    count = htf_candles.size()
+    max_i = math.min(count - 1, HTF_SWEEP_STATE_CANDLES - 1)
+    if count > 1 and max_i >= 1
+        for i = max_i to 1 by 1
+            c1 = htf_candles.get(i)
+            c2_next = htf_candles.get(i - 1)
+            for [j, sweep] in c1.ltf_sweeps
+                htf_sweep = c1.htf_sweeps.get(j)
+                if not sweep.removed and na(sweep.invalidated_on)
+                    newest_closed_eval = sweep.last_closed_eval_o_idx
+                    scan_start = full_rescan ? i - 1 : 0
+                    for k = scan_start to 0 by 1
+                        c2 = htf_candles.get(k)
+                        skip_closed = c2.is_closed and not na(newest_closed_eval) and c2.o_idx <= newest_closed_eval
+                        if not skip_closed
+                            invalidated = sweep.invalidate_sweep(c2)
+                            if sweep.x2 <= c2.c_idx and sweep.x2 > c2.o_idx
+                                if not c2.is_closed
+                                    sweep.invalidated := invalidated
+                                    htf_sweep.invalidated := sweep.invalidated
+                                else
+                                    newest_closed_eval := c2.o_idx
+                                    if invalidated and na(sweep.invalidated_on)
+                                        sweep.invalidated_on := c2.o_idx
+                                        htf_sweep.invalidated_on := sweep.invalidated_on
+                                        break
+                            else
+                                if not c2.is_closed
+                                    sweep.invalidated := invalidated
+                                    htf_sweep.invalidated := sweep.invalidated
+                                else
+                                    newest_closed_eval := c2.o_idx
+                                    if invalidated and na(sweep.invalidated_on)
+                                        sweep.invalidated := invalidated
+                                        sweep.invalidated_on := c2.o_idx
+                                        htf_sweep.invalidated := sweep.invalidated
+                                        htf_sweep.invalidated_on := sweep.invalidated_on
+                                        break
+                    sweep.last_closed_eval_o_idx := newest_closed_eval
+                    htf_sweep.last_closed_eval_o_idx := newest_closed_eval
+                if not sweep.formed and not sweep.removed and c2_next.is_closed
+                    if sweep.invalidated and not na(sweep.invalidated_on)
+                        sweep.removed := true
+                        htf_sweep.removed := true
+                    else
+                        sweep.formed := true
+                        htf_sweep.formed := true
+        htf_candles
+method detect_sweeps(array<UDT_HTF_Candle> htf_candles, bool full_rescan) =>
+    count = htf_candles.size()
+    if count > 1
+        size = full_rescan ? math.min(4, count - 1) : 1
+        for i = size to 1 by 1
+            c1 = htf_candles.get(i)
+            c2 = htf_candles.get(i - 1)
+            if c2.h > c1.h and na(c2.high_break_idx)
+                c2.high_break_idx := c2.h_idx
+            if c2.l < c1.l and na(c2.low_break_idx)
+                c2.low_break_idx := c2.l_idx
+            if c1.htf_sweeps.size() < 2
+                is_high_sweep = c2.h > c1.h and c2.c < c1.h
+                is_low_sweep = c2.l < c1.l and c2.c > c1.l
+                if is_high_sweep and not c1.bull_sweep
+                    c1.add_sweep_pair(c2, true)
+                if is_low_sweep and not c1.bear_sweep
+                    c1.add_sweep_pair(c2, false)
+            if i == 1
+                for sweep in c1.ltf_sweeps
+                    sweep.x2 := c2.c_idx
+                    sweep.c2_left := not na(sweep.cross_idx) ? math.max(c2.o_idx, sweep.cross_idx) : c2.o_idx
+                    sweep.c2_right := c2.c_idx
+        htf_candles.invalidate_sweeps(full_rescan)
+    htf_candles
+
+
+
+type HtfPaneCfg
+    bool show
+    bool candle_show
+    string tf
+    bool htf_show
+    bool ltf_sweeps
+    bool htf_sweeps
+    int sweep_cap
+    bool sweep_stop
+    color sweep_color
+f_idx_ln(int x1, float y1, int x2, float y2, color clr, st) =>
+    ln = line.new(x1=x1, y1=y1, x2=x2, y2=y2, xloc=xloc.bar_index, color=clr, style=st, width=1)
+    bin.bin_ln.push(ln)
+    ln
+f_htf_pane_cisd_core(array<UDT_HTF_Candle> candles, int c2_index, int dir) =>
+    float level = na
+    float inv_level = na
+    int anchor_index = na
+    if c2_index >= 0 and c2_index < candles.size()
+        c2 = candles.get(c2_index)
+        scan_upclose = dir == -1
+        c2_upclose = c2.c > c2.o
+        c2_downclose = c2.c < c2.o
+        start_index = (scan_upclose ? c2_upclose : c2_downclose) ? c2_index : c2_index + 1
+        last_scan_index = math.min(candles.size() - 1, start_index + HTF_PANE_CISD_SCAN_CANDLES - 1)
+        scanned = 0
+        started = false
+        if start_index <= last_scan_index
+            for scan_index = start_index to last_scan_index
+                scan_candle = candles.get(scan_index)
+                upclose = scan_candle.c > scan_candle.o
+                downclose = scan_candle.c < scan_candle.o
+                accepted = scan_upclose ? upclose : downclose
+                opposite = scan_upclose ? downclose : upclose
+                if accepted
+                    started := true
+                    scanned += 1
+                    level := scan_candle.o
+                    inv_level := QTU.cisdBodyInvAccum(inv_level, dir, scan_candle.o, scan_candle.c)
+                    anchor_index := scan_index
+                    if scanned >= HTF_PANE_CISD_SCAN_CANDLES
+                        break
+                else if started and opposite
+                    break
+    [level, inv_level, anchor_index]
+f_htf_pane_cisd_inv_level_veto(array<UDT_HTF_Candle> candles, int dir, float inv_level, int anchor_index) =>
+    violated = false
+    if dir != 0 and not na(inv_level) and not na(anchor_index) and anchor_index > 0
+        // Pane arrays are newest-first. Start at the HTF candle immediately after the CISD anchor.
+        for scan_index = anchor_index - 1 to 0
+            scan_candle = candles.get(scan_index)
+            if scan_candle.is_closed
+                violated := dir == 1 ? scan_candle.c < inv_level : dir == -1 ? scan_candle.c > inv_level : false
+                if violated
+                    break
+    violated
+
+f_htf_pane_cisd_confirmation(array<UDT_HTF_Candle> candles, int c2_index, int dir, float level, float c2_ext, int source_invalidated_on) =>
+    int confirm_index = na
+    bool extreme_branched = false
+    if not na(level) and not na(c2_ext)
+        for scan_index = c2_index to 0
+            scan_candle = candles.get(scan_index)
+            if scan_index < c2_index and scan_candle.is_closed
+                extreme_branched := extreme_branched or QTU.cisdC2Invalidates(dir, c2_ext, scan_candle.l, scan_candle.h)
+            source_dead = not na(source_invalidated_on) and source_invalidated_on <= scan_candle.c_idx
+            crossed = scan_candle.is_closed and (dir == 1 ? scan_candle.c > level : scan_candle.c < level)
+            if source_dead or extreme_branched
+                break
+            if crossed
+                confirm_index := scan_index
+                break
+    confirm_index
+f_htf_pane_cisd_preconfirm_valid(array<UDT_HTF_Candle> candles, int c2_index, int dir, float c2_ext, int source_invalidated_on) =>
+    valid = not na(c2_ext)
+    bool extreme_branched = false
+    if valid
+        for scan_index = c2_index to 0
+            scan_candle = candles.get(scan_index)
+            if scan_index < c2_index and scan_candle.is_closed
+                extreme_branched := extreme_branched or QTU.cisdC2Invalidates(dir, c2_ext, scan_candle.l, scan_candle.h)
+            source_dead = not na(source_invalidated_on) and source_invalidated_on <= scan_candle.c_idx
+            if source_dead or extreme_branched
+                valid := false
+                break
+    valid
+f_htf_pane_cisd_post_confirm_state(array<UDT_HTF_Candle> candles, int confirm_index, int dir, float inv_level) =>
+    invalid = false
+    pending = false
+    if not na(inv_level) and confirm_index > 0
+        for scan_index = confirm_index - 1 to 0
+            scan_candle = candles.get(scan_index)
+            if scan_candle.is_closed
+                invalid := dir == 1 ? scan_candle.c < inv_level : dir == -1 ? scan_candle.c > inv_level : false
+                if invalid
+                    break
+            else
+                pending := pending or (dir == 1 ? scan_candle.l < inv_level : dir == -1 ? scan_candle.h > inv_level : false)
+    [invalid, pending]
+f_draw_htf_pane_cisds(array<UDT_HTF_Candle> candles, bool enabled) =>
+    candle_count = candles.size()
+    if enabled and htf_cisd_show and candle_count > 1
+        for c1_index = 1 to candle_count - 1
+            c1 = candles.get(c1_index)
+            c2_index = c1_index - 1
+            c2 = candles.get(c2_index)
+            if c2.is_closed and c1.htf_sweeps.size() > 0
+                drawn = false
+                for sweep in c1.htf_sweeps
+                    if not drawn
+                        dir = sweep.bull ? -1 : 1
+                        c2_ext = dir == 1 ? c2.l : c2.h
+                        [level, inv_level, anchor_index] = f_htf_pane_cisd_core(candles, c2_index, dir)
+                        inv_vetoed = f_htf_pane_cisd_inv_level_veto(candles, dir, inv_level, anchor_index)
+                        confirm_index = f_htf_pane_cisd_confirmation(candles, c2_index, dir, level, c2_ext, sweep.invalidated_on)
+                        [invalid, pending] = f_htf_pane_cisd_post_confirm_state(candles, confirm_index, dir, inv_level)
+                        preconfirm_valid = f_htf_pane_cisd_preconfirm_valid(candles, c2_index, dir, c2_ext, sweep.invalidated_on)
+                        if not inv_vetoed and not invalid and not pending and not na(confirm_index) and not na(level) and not na(inv_level) and not na(anchor_index)
+                            anchor_x = candles.get(anchor_index).candle_left
+                            crossover_x = candles.get(confirm_index).candle_rigth
+                            pane_line = line.new(x1=anchor_x, y1=level, x2=math.max(anchor_x + 1, crossover_x + HTF_PANE_CISD_EXTEND_BARS), y2=level, xloc=xloc.bar_index, color=dir == 1 ? htf_cisd_bull_clr : htf_cisd_bear_clr, style=line.style_solid, width=htf_cisd_line_width)
+                            bin.bin_ln.push(pane_line)
+                            drawn := true
+                        else if not inv_vetoed and htf_early_cisd_show and na(confirm_index) and preconfirm_valid and not na(level) and not na(inv_level) and not na(anchor_index)
+                            live_candle = candles.get(0)
+                            early_cross = not live_candle.is_closed and (dir == 1 ? live_candle.c > level : live_candle.c < level)
+                            if early_cross
+                                anchor_x = candles.get(anchor_index).candle_left
+                                early_x = live_candle.candle_rigth
+                                early_line = line.new(x1=anchor_x, y1=level, x2=math.max(anchor_x + 1, early_x + HTF_PANE_CISD_EXTEND_BARS), y2=level, xloc=xloc.bar_index, color=dir == 1 ? htf_cisd_bull_clr : htf_cisd_bear_clr, style=htf_early_cisd_line_style, width=htf_early_cisd_line_width)
+                                bin.bin_ln.push(early_line)
+                                drawn := true
+    0
+
+f_sd_source_from_htf_candle(UDT_HTF_Candle _candle, int _dir, int _recency_bar) =>
+    source = SdProjectionSource.new()
+    if _dir != 0 and not na(_candle.o_idx) and not na(_candle.o) and not na(_candle.c) and not na(_candle.h) and not na(_candle.l)
+        source.ok := true
+        source.dir := _dir
+        source.recency_bar := _recency_bar
+        source.anchor_bar := _candle.o_idx
+        source.body_high := math.max(_candle.o, _candle.c)
+        source.body_low := math.min(_candle.o, _candle.c)
+        source.wick_high := _candle.h
+        source.wick_low := _candle.l
+    source
+
+f_select_htf_pane_cisd_sd(array<UDT_HTF_Candle> _candles, bool _enabled, SdProjectionSource _best) =>
+    best = _best
+    candle_count = _candles.size()
+    if _enabled and htf_cisd_show and candle_count > 1
+        for c1_index = 1 to candle_count - 1
+            c1 = _candles.get(c1_index)
+            c2_index = c1_index - 1
+            c2 = _candles.get(c2_index)
+            if c2.is_closed and c1.htf_sweeps.size() > 0
+                selected = false
+                for sweep in c1.htf_sweeps
+                    if not selected
+                        dir = sweep.bull ? -1 : 1
+                        c2_ext = dir == 1 ? c2.l : c2.h
+                        [level, inv_level, anchor_index] = f_htf_pane_cisd_core(_candles, c2_index, dir)
+                        inv_vetoed = f_htf_pane_cisd_inv_level_veto(_candles, dir, inv_level, anchor_index)
+                        confirm_index = f_htf_pane_cisd_confirmation(_candles, c2_index, dir, level, c2_ext, sweep.invalidated_on)
+                        [invalid, pending] = f_htf_pane_cisd_post_confirm_state(_candles, confirm_index, dir, inv_level)
+                        preconfirm_valid = f_htf_pane_cisd_preconfirm_valid(_candles, c2_index, dir, c2_ext, sweep.invalidated_on)
+                        confirmed_visible = not inv_vetoed and not invalid and not pending and not na(confirm_index) and not na(level) and not na(inv_level) and not na(anchor_index)
+                        early_visible = false
+                        if not inv_vetoed and htf_early_cisd_show and na(confirm_index) and preconfirm_valid and not na(level) and not na(inv_level) and not na(anchor_index)
+                            live_candle = _candles.get(0)
+                            early_visible := not live_candle.is_closed and (dir == 1 ? live_candle.c > level : live_candle.c < level)
+                        if confirmed_visible or early_visible
+                            anchor_candle = _candles.get(anchor_index)
+                            candidate = f_sd_source_from_htf_candle(anchor_candle, dir, c2.o_idx)
+                            if f_sd_source_better(candidate, best)
+                                best := candidate
+                            selected := true
+    best
+
+f_select_htf_c2_sd(array<UDT_HTF_Candle> _candles, bool _enabled, SdProjectionSource _best) =>
+    best = _best
+    candle_count = _candles.size()
+    if _enabled and candle_count > 1
+        for c1_index = 1 to candle_count - 1
+            c1 = _candles.get(c1_index)
+            c2 = _candles.get(c1_index - 1)
+            if c2.is_closed and c1.htf_sweeps.size() > 0
+                selected = false
+                for sweep in c1.htf_sweeps
+                    if not selected
+                        c2_inside_c1 = not sweep.invalidate_sweep(c2)
+                        valid_c2 = not sweep.invalidated and not sweep.removed and c2_inside_c1
+                        if valid_c2
+                            dir = sweep.bull ? -1 : 1
+                            candidate = f_sd_source_from_htf_candle(c2, dir, c2.o_idx)
+                            if f_sd_source_better(candidate, best)
+                                best := candidate
+                            selected := true
+    best
+
+f_draw_sd_projections(PendingCisd _early, bool _pane_cisd_1, bool _pane_cisd_2, bool _pane_cisd_3, bool _pane_1, bool _pane_2, bool _pane_3) =>
+    if sd_projection_show
+        source = SdProjectionSource.new()
+        if sd_projection_source_input == 'On-chart CISD'
+            source := f_latest_displaying_on_chart_sd()
+            early_source = f_sd_source_from_candidate(_early)
+            if f_sd_source_better(early_source, source) or early_source.ok and source.ok and nz(early_source.recency_bar, -1) == nz(source.recency_bar, -1)
+                source := early_source
+        else if sd_projection_source_input == 'HTF Pane CISD'
+            source := f_select_htf_pane_cisd_sd(htf_1_candles, _pane_cisd_1, source)
+            source := f_select_htf_pane_cisd_sd(htf_2_candles, _pane_cisd_2, source)
+            source := f_select_htf_pane_cisd_sd(htf_3_candles, _pane_cisd_3, source)
+        else
+            source := f_select_htf_c2_sd(htf_1_candles, _pane_1, source)
+            source := f_select_htf_c2_sd(htf_2_candles, _pane_2, source)
+            source := f_select_htf_c2_sd(htf_3_candles, _pane_3, source)
+        range_high = sd_anchor_mode_input == 'High to Low' ? source.wick_high : source.body_high
+        range_low = sd_anchor_mode_input == 'High to Low' ? source.wick_low : source.body_low
+        price_range = range_high - range_low
+        if source.ok and not na(source.anchor_bar) and not na(price_range) and price_range > syminfo.mintick * 0.5
+            levels = f_parse_sd_projection_levels(sd_projection_levels_input)
+            level_count = levels.size()
+            if level_count > 0
+                projection_x1 = source.anchor_bar
+                projection_x2 = projection_x1 + SD_PROJECTION_EXTEND_BARS
+                for i = 0 to level_count - 1
+                    multiple = levels.get(i)
+                    projection_price = source.dir == 1 ? range_low + price_range * multiple : range_high - price_range * multiple
+                    projection_label_x = projection_x1 - 1
+                    projection_line = line.new(x1=projection_x1, y1=projection_price, x2=projection_x2, y2=projection_price, xloc=xloc.bar_index, color=sd_projection_color, style=line.style_dotted, width=1)
+                    projection_label = label.new(x=projection_label_x, y=projection_price, text='+' + str.tostring(multiple, '#.####'), xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_right, color=color.new(color.white, 100), textcolor=sd_projection_color, size=size.tiny)
+                    bin.bin_ln.push(projection_line)
+                    bin.bin_lbl.push(projection_label)
+    0
+
+f_idx_box(int l, float t, int r, float b, color bc, color bg) =>
+    bin.bin_box.push(box.new(left=l, top=t, right=r, bottom=b, xloc=xloc.bar_index, border_color=bc, border_width=1, bgcolor=bg))
+    0
+method clear_dealing_range(DealingRangeVisuals this) =>
+    for i = 0 to 4
+        level_line = this.lines.get(i)
+        level_label = this.labels.get(i)
+        if not na(level_line)
+            line.delete(level_line)
+            this.lines.set(i, na)
+        if not na(level_label)
+            label.delete(level_label)
+            this.labels.set(i, na)
+    if not na(this.premium_box)
+        box.delete(this.premium_box)
+        this.premium_box := na
+    if not na(this.discount_box)
+        box.delete(this.discount_box)
+        this.discount_box := na
+    this
+
+method update_dealing_range_level(DealingRangeVisuals this, int _index, bool _active, int _x1, int _x2, float _price, color _color, _style, string _text) =>
+    level_line = this.lines.get(_index)
+    level_label = this.labels.get(_index)
+    if _active
+        if na(level_line)
+            level_line := line.new(x1 = _x1, y1 = _price, x2 = _x2, y2 = _price, xloc = xloc.bar_index, color = _color, style = _style, width = 1)
+            this.lines.set(_index, level_line)
+        else
+            line.set_xy1(level_line, _x1, _price)
+            line.set_xy2(level_line, _x2, _price)
+            line.set_color(level_line, _color)
+            line.set_style(level_line, _style)
+        label_x = _x2 + 1
+        if na(level_label)
+            level_label := label.new(x = label_x, y = _price, text = _text, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(color.white, 100), textcolor = dealing_range_label_color, size = size.tiny)
+            this.labels.set(_index, level_label)
+        else
+            label.set_xy(level_label, label_x, _price)
+            label.set_text(level_label, _text)
+            label.set_textcolor(level_label, dealing_range_label_color)
+    else
+        if not na(level_line)
+            line.delete(level_line)
+            this.lines.set(_index, na)
+        if not na(level_label)
+            label.delete(level_label)
+            this.labels.set(_index, na)
+    this
+
+f_update_dealing_range_box(box _box, int _x1, int _x2, float _top, float _bottom, color _color) =>
+    result = _box
+    if na(result)
+        result := box.new(left = _x1, top = _top, right = _x2, bottom = _bottom, xloc = xloc.bar_index, border_color = color.new(_color, 100), bgcolor = color.new(_color, 90))
+    else
+        box.set_lefttop(result, _x1, _top)
+        box.set_rightbottom(result, _x2, _bottom)
+        box.set_border_color(result, color.new(_color, 100))
+        box.set_bgcolor(result, color.new(_color, 90))
+    result
+
+f_dealing_range_bounds(array<UDT_HTF_Candle> _candles) =>
+    float range_top = na
+    float range_bottom = na
+    int pane_left = na
+    int pane_right = na
+    int high_anchor = na
+    int low_anchor = na
+    for candle in _candles
+        positioned = not na(candle.candle_left) and not na(candle.candle_rigth)
+        if positioned and not na(candle.h) and not na(candle.l)
+            if na(range_top) or candle.h > range_top
+                range_top := candle.h
+                high_anchor := candle.h_idx
+            if na(range_bottom) or candle.l < range_bottom
+                range_bottom := candle.l
+                low_anchor := candle.l_idx
+            pane_left := na(pane_left) ? candle.candle_left : math.min(pane_left, candle.candle_left)
+            pane_right := na(pane_right) ? candle.candle_rigth : math.max(pane_right, candle.candle_rigth)
+    [range_top, range_bottom, pane_left, pane_right, high_anchor, low_anchor]
+
+method draw_dealing_range(DealingRangeVisuals this, array<UDT_HTF_Candle> _candles, bool _enabled, string _mode, string _display, int _offset) =>
+    [range_top, range_bottom, pane_left, pane_right, high_anchor, low_anchor] = f_dealing_range_bounds(_candles)
+    on_chart = _display == 'On Chart Overlay'
+    valid_anchors = not on_chart or (not na(high_anchor) and not na(low_anchor))
+    valid_range = _enabled and valid_anchors and not na(range_top) and not na(range_bottom) and not na(pane_left) and not na(pane_right) and range_top - range_bottom > syminfo.mintick * 0.5
+    if valid_range
+        pane_width = math.max(1, pane_right - pane_left)
+        int draw_left = pane_left
+        int draw_right = pane_right
+        if on_chart
+            draw_left := math.min(high_anchor, low_anchor)
+            draw_right := math.max(high_anchor, low_anchor)
+            if draw_right == draw_left
+                draw_right += 1
+        else if _display == 'HTF Pane Offset'
+            draw_left := bar_index + _offset
+            draw_right := draw_left + pane_width
+        range_size = range_top - range_bottom
+        equilibrium = range_bottom + range_size * 0.5
+        quadrant_mode = _mode == 'Quadrants'
+        ratios = array.from(1.0, 0.75, 0.5, 0.25, 0.0)
+        names = array.from('1', '0.75', '0.5', '0.25', '0')
+        for i = 0 to 4
+            level_active = quadrant_mode or i == 0 or i == 2 or i == 4
+            ratio = ratios.get(i)
+            price = range_bottom + range_size * ratio
+            level_color = ratio >= 0.5 ? dealing_range_premium_color : dealing_range_discount_color
+            level_style = line.style_dotted
+            this.update_dealing_range_level(i, level_active, draw_left, draw_right, price, level_color, level_style, names.get(i))
+        this.premium_box := f_update_dealing_range_box(this.premium_box, draw_left, draw_right, range_top, equilibrium, dealing_range_premium_color)
+        this.discount_box := f_update_dealing_range_box(this.discount_box, draw_left, draw_right, equilibrium, range_bottom, dealing_range_discount_color)
+    else
+        this.clear_dealing_range()
+    this
+
+method clear_key_levels(KeyLevelVisuals this) =>
+    if not na(this.high_line)
+        line.delete(this.high_line)
+        this.high_line := na
+    if not na(this.low_line)
+        line.delete(this.low_line)
+        this.low_line := na
+    if not na(this.high_label)
+        label.delete(this.high_label)
+        this.high_label := na
+    if not na(this.low_label)
+        label.delete(this.low_label)
+        this.low_label := na
+    this
+
+f_update_key_level(line _line, label _label, bool _active, int _anchor, float _price, string _text) =>
+    result_line = _line
+    result_label = _label
+    if _active
+        end_x = bar_index + 10
+        if na(result_line)
+            result_line := line.new(x1 = _anchor, y1 = _price, x2 = end_x, y2 = _price, xloc = xloc.bar_index, color = key_levels_line_color, style = key_levels_line_style, width = 1)
+        else
+            line.set_xy1(result_line, _anchor, _price)
+            line.set_xy2(result_line, end_x, _price)
+            line.set_color(result_line, key_levels_line_color)
+            line.set_style(result_line, key_levels_line_style)
+        if na(result_label)
+            result_label := label.new(x = end_x, y = _price, text = _text, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(color.white, 100), textcolor = global_text_color, size = size.tiny)
+        else
+            label.set_xy(result_label, end_x, _price)
+            label.set_text(result_label, _text)
+            label.set_textcolor(result_label, global_text_color)
+    else
+        if not na(result_line)
+            line.delete(result_line)
+            result_line := na
+        if not na(result_label)
+            label.delete(result_label)
+            result_label := na
+    [result_line, result_label]
+
+method draw_key_levels(KeyLevelVisuals this, array<UDT_HTF_Candle> _candles, bool _enabled, string _tf) =>
+    [range_high, range_low, pane_left, pane_right, high_anchor, low_anchor] = f_dealing_range_bounds(_candles)
+    high_active = _enabled and not na(range_high) and not na(high_anchor)
+    low_active = _enabled and not na(range_low) and not na(low_anchor)
+    tf_name = QTU.htfSourceLabel(_tf, false)
+    [next_high_line, next_high_label] = f_update_key_level(this.high_line, this.high_label, high_active, high_anchor, range_high, '-' + tf_name + ' KL')
+    [next_low_line, next_low_label] = f_update_key_level(this.low_line, this.low_label, low_active, low_anchor, range_low, '+' + tf_name + ' KL')
+    this.high_line := next_high_line
+    this.high_label := next_high_label
+    this.low_line := next_low_line
+    this.low_label := next_low_label
+    this
+
+method draw_sweep(UDT_Sweep sweep, bool ltf, HtfPaneCfg cfg, int c3_open_idx) =>
+    _show = ltf ? cfg.ltf_sweeps : cfg.htf_sweeps
+    if _show
+        end_x2 = ltf and cfg.sweep_stop and not na(sweep.cross_idx) ? sweep.cross_idx : sweep.x2
+        if ltf and end_x2 == bar_index and not (cfg.sweep_stop and not na(sweep.cross_idx))
+            end_x2 := end_x2 + 5
+        ln = f_idx_ln(sweep.x1, sweep.y, end_x2, sweep.y, cfg.sweep_color, line.style_solid)
+        if ltf and not na(sweep.cross_idx) and not na(c3_open_idx) and c3_open_idx > sweep.cross_idx
+            f_idx_ln(sweep.cross_idx, sweep.y, c3_open_idx, sweep.y, cfg.sweep_color, line.style_dotted)
+        if ltf
+            sweep.ltf_line := ln
+        else
+            sweep.htf_line := ln
+    sweep
+htf_delete_candle_visuals(UDT_HTF_Candle candle) =>
+    for sweep in candle.ltf_sweeps
+        if not na(sweep.ltf_line)
+            sweep.ltf_line.delete()
+        if not na(sweep.htf_line)
+            sweep.htf_line.delete()
+    for sweep in candle.htf_sweeps
+        if not na(sweep.ltf_line)
+            sweep.ltf_line.delete()
+        if not na(sweep.htf_line)
+            sweep.htf_line.delete()
+    if not na(candle.low_line)
+        candle.low_line.delete()
+    if not na(candle.high_line)
+        candle.high_line.delete()
+    0
+
+method add_htf_candle(array<UDT_HTF_Candle> htf_candles, UDT_HTF_Candle candle, int total_candles_number) =>
+    if not na(candle)
+        htf_candles.unshift(candle)
+    while htf_candles.size() > total_candles_number
+        removed_candle = htf_candles.pop()
+        htf_delete_candle_visuals(removed_candle)
+    htf_candles
+method detect_htf_candle(array<UDT_HTF_Candle> htf_candles, bool enabled, string tf) =>
+    UDT_HTF_Candle htf_candle = na
+    tfTime = time(tf)
+    regular_begins = ta.change(tfTime) != 0
+    custom_daily = htf_custom_daily_open and tf_sec <= TF_SEC_60 and QTU.isDailyTf(tf)
+    tf_session_begins = custom_daily ? htf_custom_daily_begin : regular_begins
+    if enabled
+        if tf_session_begins or htf_candles.size() == 0
+            candle = UDT_HTF_Candle.new(tf=tf, htf_sweeps=array.new<UDT_Sweep>(), ltf_sweeps=array.new<UDT_Sweep>())
+            candle.o := open
+            candle.c := close
+            candle.h := high
+            candle.l := low
+            candle.o_idx := bar_index
+            candle.c_idx := bar_index
+            candle.h_idx := bar_index
+            candle.l_idx := bar_index
+            candle.ot := time
+            candle.bull := QTU.isBullishCandle(candle.c, candle.o, candle.h, candle.l)
+            if htf_candles.size() > 0
+                last_candle = htf_candles.get(0)
+                last_candle.is_closed := true
+                last_candle.ct := time
+                last_candle.ct
+            htf_candle := candle
+            htf_candle
+        else if htf_candles.size() > 0
+            candle = htf_candles.first()
+            candle.c := close
+            candle.c_idx := bar_index
+            candle.ct := time
+            if high > candle.h
+                candle.h := high
+                candle.h_idx := bar_index
+                candle.h_idx
+            if low < candle.l
+                candle.l := low
+                candle.l_idx := bar_index
+                candle.l_idx
+            candle.bull := QTU.isBullishCandle(candle.c, candle.o, candle.h, candle.l)
+            candle.bull
+    htf_candle
+method position_htf_candle(UDT_HTF_Candle candle, int candle_index, int offset, int buffer, int width, int candles_amount) =>
+    w = math.max(2, width)
+    candle.shift := QTU.htfCandleShift(candle_index, offset, buffer, w, candles_amount)
+    candle.candle_left := bar_index + candle.shift
+    candle.candle_rigth := candle.candle_left + w
+    candle.candle_top := math.max(candle.o, candle.c)
+    candle.candle_bottom := math.min(candle.o, candle.c)
+    candle.wick_x := QTU.htfWickX(candle.candle_left, w)
+    candle
+method position_htf_candles(array<UDT_HTF_Candle> htf_candles, int shift) =>
+    candles_amount = htf_candles.size()
+    for [index, candle] in htf_candles
+        candle.position_htf_candle(index, shift, 1, htf_candle_width, candles_amount)
+method draw_htf_candle(UDT_HTF_Candle candle) =>
+    color candle_color = candle.bull ? bull_color : bear_color
+    color border_color = candle.bull ? bull_border_color : bear_border_color
+    color wick_color = candle.bull ? bull_wick_color : bear_wick_color
+    f_idx_box(candle.candle_left, candle.candle_top, candle.candle_rigth, candle.candle_bottom, border_color, candle_color)
+    f_idx_ln(candle.wick_x, candle.h, candle.wick_x, candle.candle_top, wick_color, line.style_solid)
+    f_idx_ln(candle.wick_x, candle.candle_bottom, candle.wick_x, candle.l, wick_color, line.style_solid)
+    candle
+f_htf_label_bounds(array<UDT_HTF_Candle> htf_candles, bool enabled, float base_top, float base_bottom) =>
+    y_top = base_top
+    y_bottom = base_bottom
+    if enabled
+        for candle in htf_candles
+            y_top := na(y_top) ? candle.h : math.max(y_top, candle.h)
+            y_bottom := na(y_bottom) ? candle.l : math.min(y_bottom, candle.l)
+    [y_top, y_bottom]
+f_push_htf_lbl(int x, float y, string txt, st, color clr, string sz) =>
+    bin.bin_lbl.push(QTU.newBoldLabel(x, y, txt, st, clr, sz, global_font_family))
+    0
+method draw_htf_label(array<UDT_HTF_Candle> htf_candles, string tf, float shared_top, float shared_bottom, int close_t, color label_clr, bool src_lbl) =>
+    float y_top = na
+    float y_bottom = na
+    int x_min = na
+    int x_max = na
+    int cd_close = na
+    for [index, candle] in htf_candles
+        y_top := na(y_top) ? candle.h : math.max(y_top, candle.h)
+        y_bottom := na(y_bottom) ? candle.l : math.min(y_bottom, candle.l)
+        x_min := na(x_min) ? candle.wick_x : math.min(x_min, candle.wick_x)
+        x_max := na(x_max) ? candle.wick_x : math.max(x_max, candle.wick_x)
+        cd_close := index == 0 and htf_custom_daily_open and QTU.isDailyTf(tf) ? candle.ot + 86400000 : cd_close
+    x = not na(x_min) and not na(x_max) ? math.round(math.avg(x_min, x_max)) : na
+    top_y = htf_label_alignment == 'Align' and not na(shared_top) ? shared_top : y_top
+    bottom_y = htf_label_alignment == 'Align' and not na(shared_bottom) ? shared_bottom : y_bottom
+    pad = QTU.labelPad(top_y, bottom_y, syminfo.mintick)
+    top_y += pad
+    bottom_y -= pad
+    txt = QTU.htfSourceLabel(tf, src_lbl)
+    rem = QTU.remTime(na(cd_close) ? close_t : cd_close, timenow)
+    has_rem = str.length(rem) > 0
+    top_on = htf_label_position == 'Both' or htf_label_position == 'Top'
+    bottom_on = htf_label_position == 'Both' or htf_label_position == 'Bottom'
+    if top_on and not na(top_y) and not na(x)
+        if htf_label_show
+            f_push_htf_lbl(x, top_y, txt + (htf_timer_show and has_rem ? "\n" : ""), label.style_label_down, label_clr, size.small)
+        if htf_timer_show and has_rem
+            f_push_htf_lbl(x, top_y, rem, label.style_label_down, htf_timer_color, size.small)
+    if bottom_on and not na(bottom_y) and not na(x)
+        if htf_label_show
+            f_push_htf_lbl(x, bottom_y, (htf_timer_show and has_rem ? "\n" : "") + txt, label.style_label_up, label_clr, size.small)
+        if htf_timer_show and has_rem
+            f_push_htf_lbl(x, bottom_y, rem, label.style_label_up, htf_timer_color, size.small)
+    htf_candles
+f_draw_sweep_set(array<UDT_HTF_Candle> htf_candles, bool ltf, HtfPaneCfg cfg) =>
+    if cfg.sweep_cap == 1
+        int newest_candle_index = na
+        int newest_sweep_index = na
+        int newest_event_index = na
+        for [i, candle] in htf_candles
+            sweep_count = ltf ? array.size(candle.ltf_sweeps) : array.size(candle.htf_sweeps)
+            if sweep_count > 0
+                for j = 0 to sweep_count - 1
+                    UDT_Sweep sweep = ltf ? array.get(candle.ltf_sweeps, j) : array.get(candle.htf_sweeps, j)
+                    c2_inside_c1 = false
+                    if i > 0
+                        UDT_HTF_Candle c2_ref = array.get(htf_candles, i - 1)
+                        c2_inside_c1 := not sweep.invalidate_sweep(c2_ref)
+                    valid_c1_sweep = not sweep.invalidated and not sweep.removed and c2_inside_c1
+                    if valid_c1_sweep
+                        event_index = nz(sweep.cross_idx, nz(sweep.c2_right, sweep.x2))
+                        if na(newest_event_index) or event_index > newest_event_index
+                            newest_event_index := event_index
+                            newest_candle_index := i
+                            newest_sweep_index := j
+        if not na(newest_candle_index) and not na(newest_sweep_index)
+            newest_candle = htf_candles.get(newest_candle_index)
+            UDT_Sweep newest_sweep = ltf ? newest_candle.ltf_sweeps.get(newest_sweep_index) : newest_candle.htf_sweeps.get(newest_sweep_index)
+            int c3_open_idx = newest_candle_index >= 2 ? htf_candles.get(newest_candle_index - 2).o_idx : na
+            newest_sweep.draw_sweep(ltf, cfg, c3_open_idx)
+    else
+        counted = 0
+        for [i, candle] in htf_candles
+            sweep_count = ltf ? array.size(candle.ltf_sweeps) : array.size(candle.htf_sweeps)
+            if sweep_count > 0
+                c2_closed = ltf or (i > 0 and array.get(htf_candles, i - 1).is_closed)
+                for j = 0 to sweep_count - 1
+                    UDT_Sweep sweep = ltf ? array.get(candle.ltf_sweeps, j) : array.get(candle.htf_sweeps, j)
+                    c2_live_valid = true
+                    if i > 0
+                        UDT_HTF_Candle c2_ref = array.get(htf_candles, i - 1)
+                        c2_live_valid := not sweep.invalidate_sweep(c2_ref)
+                    if not sweep.invalidated and not sweep.removed and c2_live_valid
+                        within_cap = not c2_closed or counted < cfg.sweep_cap
+                        if within_cap
+                            int c3_open_idx = i >= 2 ? htf_candles.get(i - 2).o_idx : na
+                            sweep.draw_sweep(ltf, cfg, c3_open_idx)
+                        if c2_closed and within_cap
+                            counted += 1
+                            if counted >= cfg.sweep_cap
+                                break
+            if counted >= cfg.sweep_cap
+                break
+    0
+method plot_ltf(array<UDT_HTF_Candle> htf_candles, HtfPaneCfg cfg) =>
+    if cfg.ltf_sweeps
+        f_draw_sweep_set(htf_candles, true, cfg)
+    htf_candles
+method plot_htf(array<UDT_HTF_Candle> htf_candles, HtfPaneCfg cfg, float shared_label_top, float shared_label_bottom, int close_t, color label_clr, bool src_lbl) =>
+    htf_candles.position_htf_sweeps()
+    for candle in htf_candles
+        if cfg.htf_show and cfg.candle_show
+            candle.draw_htf_candle()
+    if cfg.htf_show and cfg.htf_sweeps
+        f_draw_sweep_set(htf_candles, false, cfg)
+    if cfg.ltf_sweeps
+        htf_candles.plot_ltf(cfg)
+    if (htf_label_show or htf_timer_show) and cfg.htf_show
+        htf_candles.draw_htf_label(cfg.tf, shared_label_top, shared_label_bottom, close_t, label_clr, src_lbl)
+    htf_candles
+f_htf_next_offset(array<UDT_HTF_Candle> _candles, int _offset) =>
+    _next = _offset
+    int _rightmost = na
+    for candle in _candles
+        if na(_rightmost) or candle.candle_rigth > _rightmost
+            _rightmost := candle.candle_rigth
+    if not na(_rightmost)
+        _next := _rightmost - bar_index + htf_sweeps_distance_between
+    _next
+f_run_htf_pane(array<UDT_HTF_Candle> _candles, HtfPaneCfg _cfg, int _offset, float _shared_label_top, float _shared_label_bottom, int _close_t, color _label_clr, bool _src_lbl) =>
+    _next_offset = _offset
+    if _cfg.show
+        _candles.position_htf_candles(_offset)
+        _candles.plot_htf(_cfg, _shared_label_top, _shared_label_bottom, _close_t, _label_clr, _src_lbl)
+        if _cfg.candle_show
+            _next_offset := f_htf_next_offset(_candles, _offset)
+    _next_offset
+f_htf_cfg(_pane, _tf) =>
+    _sec = QTU.htfSeconds(_tf)
+    _sync_off = _tf == ''
+    _show_input = _pane == 1 ? htf_sweeps_tf_1_show : _pane == 2 ? htf_sweeps_tf_2_show : htf_sweeps_tf_3_show
+    _show = _show_input and not _sync_off and not na(_sec) and tf_sec < _sec
+    _candle_show = _show
+    _ltf_sweeps = htf_sweeps_display != 'HTF Pane Only'
+    _htf_sweeps = htf_sweeps_display != 'Main Chart Only'
+    HtfPaneCfg.new(
+        _show,
+        _candle_show,
+        _tf,
+        true,
+        _ltf_sweeps,
+        _htf_sweeps,
+        htf_sweep_display_cap,
+        true,
+        htf_sweep_color
+    )
+f_update_htf_pane(array<UDT_HTF_Candle> candles, HtfPaneCfg cfg, int count, bool perf_on, bool cisd_internal) =>
+    need_visual_htf = perf_on and (cfg.show or cfg.candle_show)
+    need_cisd_htf = cisd_internal
+    need_htf = need_visual_htf or need_cisd_htf
+    if need_htf
+        c = candles.detect_htf_candle(true, cfg.tf)
+        is_new = not na(c)
+        if is_new
+            candles.add_htf_candle(c, count)
+        need_visual_sweeps = perf_on and cfg.show and (cfg.ltf_sweeps or cfg.htf_sweeps)
+        if need_visual_sweeps or need_cisd_htf
+            candles.detect_sweeps(is_new)
+    candles
+var string actual_tf_1 = htf_auto ? QTU.htfAutoTf(htf_auto_bucket_cur, 1, 'Classic Sequence') : QTU.actualTf(htf_sweeps_tf_1_custom_tf)
+var string actual_tf_2 = htf_auto ? QTU.htfAutoTf(htf_auto_bucket_cur, 2, 'Classic Sequence') : QTU.actualTf(htf_sweeps_tf_2_custom_tf)
+var string actual_tf_3 = htf_auto ? QTU.htfAutoTf(htf_auto_bucket_cur, 3, 'Classic Sequence') : QTU.actualTf(htf_sweeps_tf_3_custom_tf)
+perf_cisd_runtime_on = QTU.runtimeOn(perf_cisd_runtime_bars, max_calc_bars, bar_index, last_bar_index)
+var HtfPaneCfg htf1_cfg = f_htf_cfg(1, actual_tf_1)
+var HtfPaneCfg htf2_cfg = f_htf_cfg(2, actual_tf_2)
+var HtfPaneCfg htf3_cfg = f_htf_cfg(3, actual_tf_3)
+
+htf1_runtime_on = QTU.htfRuntimeOn(actual_tf_1, htf_sweeps_tf_1_number, tf_sec, perf_htf_runtime_bars, max_calc_bars, bar_index, last_bar_index)
+htf2_runtime_on = QTU.htfRuntimeOn(actual_tf_2, htf_sweeps_tf_2_number, tf_sec, perf_htf_runtime_bars, max_calc_bars, bar_index, last_bar_index)
+htf3_runtime_on = QTU.htfRuntimeOn(actual_tf_3, htf_sweeps_tf_3_number, tf_sec, perf_htf_runtime_bars, max_calc_bars, bar_index, last_bar_index)
+var bool cisd_panes_untied = cisd_render_mode_input == 'Allowed HTF Panes Untied'
+var bool htf1_cisd_allowed = cisd_panes_untied or htf1_cfg.show
+var bool htf2_cisd_allowed = cisd_panes_untied or htf2_cfg.show
+var bool htf3_cisd_allowed = cisd_panes_untied or htf3_cfg.show
+htf1_cisd_internal = cisd_show and htf1_cisd_allowed and perf_cisd_runtime_on
+htf2_cisd_internal = cisd_show and htf2_cisd_allowed and perf_cisd_runtime_on
+htf3_cisd_internal = cisd_show and htf3_cisd_allowed and perf_cisd_runtime_on
+
+htf_1_candles := f_update_htf_pane(htf_1_candles, htf1_cfg, htf_sweeps_tf_1_number, htf1_runtime_on, htf1_cisd_internal)
+htf_2_candles := f_update_htf_pane(htf_2_candles, htf2_cfg, htf_sweeps_tf_2_number, htf2_runtime_on, htf2_cisd_internal)
+htf_3_candles := f_update_htf_pane(htf_3_candles, htf3_cfg, htf_sweeps_tf_3_number, htf3_runtime_on, htf3_cisd_internal)
+//==============================================================================
+// Runtime draw/update
+//==============================================================================
+
+
+htf_cisd_spawn_from_sweeps(htf1_cisd_internal, htf2_cisd_internal, htf3_cisd_internal)
+cisd_runtime_needed = (perf_cisd_runtime_on and cisd_show) or cisd_event_registry.size() > 0
+htf_cisd_update_active_lines(cisd_runtime_needed)
+if barstate.islast
+    htf1_close_time = time_close(actual_tf_1)
+    htf2_close_time = time_close(actual_tf_2)
+    htf3_close_time = time_close(actual_tf_3)
+    bin.clean_bin()
+    early_cisd_candidate = f_draw_on_chart_early_cisd(htf1_cisd_internal, htf2_cisd_internal, htf3_cisd_internal)
+    f_draw_sd_projections(early_cisd_candidate, htf1_cfg.show and htf_pane_cisd_1_show, htf2_cfg.show and htf_pane_cisd_2_show, htf3_cfg.show and htf_pane_cisd_3_show, htf1_cfg.show, htf2_cfg.show, htf3_cfg.show)
+    float shared_htf_label_top = na
+    float shared_htf_label_bottom = na
+    _align_htf_labels = htf_label_alignment == 'Align'
+    [htf1_merge_top, htf1_merge_bottom] = f_htf_label_bounds(htf_1_candles, _align_htf_labels and htf1_cfg.show and htf1_cfg.htf_show, shared_htf_label_top, shared_htf_label_bottom)
+    shared_htf_label_top := htf1_merge_top
+    shared_htf_label_bottom := htf1_merge_bottom
+    [htf2_merge_top, htf2_merge_bottom] = f_htf_label_bounds(htf_2_candles, _align_htf_labels and htf2_cfg.show and htf2_cfg.htf_show, shared_htf_label_top, shared_htf_label_bottom)
+    shared_htf_label_top := htf2_merge_top
+    shared_htf_label_bottom := htf2_merge_bottom
+    [htf3_merge_top, htf3_merge_bottom] = f_htf_label_bounds(htf_3_candles, _align_htf_labels and htf3_cfg.show and htf3_cfg.htf_show, shared_htf_label_top, shared_htf_label_bottom)
+    shared_htf_label_top := htf3_merge_top
+    shared_htf_label_bottom := htf3_merge_bottom
+    offset = htf_sweeps_offset
+    offset := f_run_htf_pane(htf_1_candles, htf1_cfg, offset, shared_htf_label_top, shared_htf_label_bottom, htf1_close_time, global_text_color, false)
+    f_draw_htf_pane_cisds(htf_1_candles, htf1_cfg.show and htf_pane_cisd_1_show)
+    offset := f_run_htf_pane(htf_2_candles, htf2_cfg, offset, shared_htf_label_top, shared_htf_label_bottom, htf2_close_time, global_text_color, false)
+    f_draw_htf_pane_cisds(htf_2_candles, htf2_cfg.show and htf_pane_cisd_2_show)
+    offset := f_run_htf_pane(htf_3_candles, htf3_cfg, offset, shared_htf_label_top, shared_htf_label_bottom, htf3_close_time, global_text_color, false)
+    f_draw_htf_pane_cisds(htf_3_candles, htf3_cfg.show and htf_pane_cisd_3_show)
+    if dealing_range_source_input == 'HTF1'
+        dealing_range_visuals.draw_dealing_range(htf_1_candles, dealing_range_show and htf1_cfg.show and htf1_cfg.candle_show, dealing_range_mode_input, dealing_range_display_input, offset)
+    else if dealing_range_source_input == 'HTF2'
+        dealing_range_visuals.draw_dealing_range(htf_2_candles, dealing_range_show and htf2_cfg.show and htf2_cfg.candle_show, dealing_range_mode_input, dealing_range_display_input, offset)
+    else
+        dealing_range_visuals.draw_dealing_range(htf_3_candles, dealing_range_show and htf3_cfg.show and htf3_cfg.candle_show, dealing_range_mode_input, dealing_range_display_input, offset)
+    htf1_seconds = QTU.htfSeconds(actual_tf_1)
+    htf2_seconds = QTU.htfSeconds(actual_tf_2)
+    htf3_seconds = QTU.htfSeconds(actual_tf_3)
+    int key_levels_pane = 0
+    int key_levels_seconds = na
+    if htf1_cfg.show and not na(htf1_seconds)
+        key_levels_pane := 1
+        key_levels_seconds := htf1_seconds
+    if htf2_cfg.show and not na(htf2_seconds) and (na(key_levels_seconds) or htf2_seconds > key_levels_seconds)
+        key_levels_pane := 2
+        key_levels_seconds := htf2_seconds
+    if htf3_cfg.show and not na(htf3_seconds) and (na(key_levels_seconds) or htf3_seconds > key_levels_seconds)
+        key_levels_pane := 3
+        key_levels_seconds := htf3_seconds
+    if key_levels_pane == 1
+        key_level_visuals.draw_key_levels(htf_1_candles, key_levels_show, actual_tf_1)
+    else if key_levels_pane == 2
+        key_level_visuals.draw_key_levels(htf_2_candles, key_levels_show, actual_tf_2)
+    else if key_levels_pane == 3
+        key_level_visuals.draw_key_levels(htf_3_candles, key_levels_show, actual_tf_3)
+    else
+        key_level_visuals.clear_key_levels()
+//----------------
+//--END OF SCRIPT
+//----------------
